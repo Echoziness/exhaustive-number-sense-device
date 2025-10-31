@@ -1,10 +1,13 @@
-# exhaustive-number-sense-device
-A C++ expression solver that finds valid equations by exhaustively inserting operators between digits while preserving their order.
-## ⚡ Performance Notes
+# Exhaustive Number Sense Device
 
-**Input Length Guidelines:**
-- ✅ **5-7 digits**: Instant to few seconds
-- ✅ **8 digits**: Several minutes (acceptable)
-- ❌ **9 digits**: Computationally infeasible - optimization in progress
+A C++ expression solver that finds mathematical equations by inserting operators between digits while preserving their order.
 
-*For 9-digit inputs, the solution space grows exponentially making exhaustive search impractical with the current algorithm.*
+**Latest: v0.2** · Now with timeout mechanism and 2x performance boost
+
+##  Quick Start
+
+Download the latest release: **[NumberSolver-v0.2.exe](../../releases)**
+
+```bash
+# Run directly - no installation required
+./NumberSolver-v0.2.exe
