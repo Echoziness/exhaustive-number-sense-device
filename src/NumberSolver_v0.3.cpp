@@ -19,12 +19,14 @@ struct TaskContext {
     chrono::steady_clock::time_point start_time;
     int timeout_ms;
     int check_counter;
+    bool no_timeout;
 
-    TaskContext(int timeout) : timeout_ms(timeout), check_counter(0) {
+    TaskContext(int timeout) : timeout_ms(timeout), check_counter(0), no_timeout(timeout <= 0) {
         start_time = chrono::steady_clock::now();
     }
 
     bool isTimeout() {
+        if (no_timeout) return false;
         check_counter++;
         if (check_counter >= 500) {
             check_counter = 0;
@@ -55,13 +57,11 @@ void tryMergeAndRecur(const vector<double>& vals,
                       const vector<string>& exprs,
                       double target,
                       unordered_set<string>& solutions,
-                      TaskContext& ctx) {
-    if (ctx.isTimeout()) return;
-
-    if (hasBest) {
-        size_t current_len = 0;
-        for(const auto& s : exprs) current_len += s.size();
-        if (current_len >= bestSolution.size()) return;
+                      TaskContext& ctx,
+                      bool& timed_out) {
+    if (ctx.isTimeout()) {
+        timed_out = true;
+        return;
     }
 
     int n = vals.size();
@@ -134,11 +134,17 @@ void tryMergeAndRecur(const vector<double>& vals,
                 nexprs.push_back(exprs[j]);
             }
 
-            tryMergeAndRecur(nvals, nexprs, target, solutions, ctx);
-            if (ctx.isTimeout()) return;
+            tryMergeAndRecur(nvals, nexprs, target, solutions, ctx, timed_out);
+            if (timed_out) return;
         }
     }
 }
+
+struct Task {
+    int split;
+    int mask;
+    Task(int s, int m) : split(s), mask(m) {}
+};
 
 int main() {
     ios::sync_with_stdio(false);
@@ -151,42 +157,57 @@ int main() {
         return 0;
     }
 
+    cout << "Set timeout per task (ms, 0 for unlimited): " << flush;
+    int user_timeout;
+    if (!(cin >> user_timeout) || user_timeout < 0) {
+        user_timeout = 10000;
+    }
+
     unordered_set<string> allSolutions;
     bestSolution.clear();
     hasBest = false;
 
-    const int TIMEOUT_PER_TASK_MS = 10000;
-
     unsigned int numThreads = thread::hardware_concurrency();
     if (numThreads < 2) numThreads = 2;
 
-    vector<thread> threads;
-    vector<unordered_set<string>> threadSolutions(numThreads);
+    vector<Task> tasks;
+    for (int split = 1; split < (int)s.size(); ++split) {
+        int m = split;
+        int ways = 1 << (m - 1);
+        for (int mask = 0; mask < ways; ++mask) {
+            tasks.emplace_back(split, mask);
+        }
+    }
 
-    cout << "Using " << numThreads << " threads.\n";
+    int timeout_retry_count = 0;
+    vector<Task> pendingTasks = tasks;
 
-    int totalSplits = (int)s.size() - 1;
+    do {
+        if (timeout_retry_count > 0) {
+            cout << "\nRetry #" << timeout_retry_count << " with timeout: "
+                 << (user_timeout > 0 ? to_string(user_timeout) + "ms" : "unlimited")
+                 << " (" << pendingTasks.size() << " pending tasks)\n";
+        }
 
-    for (int t = 0; t < (int)numThreads; ++t) {
-        threads.emplace_back([&, t]() {
-            for (int split = 1; split < (int)s.size(); ++split) {
-                if ((split - 1) % numThreads != t) continue;
+        vector<Task> timedOutTasks;
+        vector<thread> threads;
+        vector<pair<int, unordered_set<string>>> threadResults[numThreads];
 
-                string left = s.substr(0, split);
-                string right = s.substr(split);
+        cout << "Using " << numThreads << " threads.\n";
 
-                {
-                    lock_guard<mutex> lock(coutMutex);
-                    cout << "Thread " << t << ": Trying " << left << " = " << right << "..." << endl;
-                }
+        for (int t = 0; t < (int)numThreads; ++t) {
+            threads.emplace_back([&, t]() {
+                for (size_t idx = 0; idx < pendingTasks.size(); ++idx) {
+                    if (idx % numThreads != (size_t)t) continue;
 
-                long long target = stoll(right);
-                int m = left.size();
-                int ways = 1 << (m - 1);
+                    int split = pendingTasks[idx].split;
+                    int mask = pendingTasks[idx].mask;
 
-                unordered_set<string> localSolutions;
+                    string left = s.substr(0, split);
+                    string right = s.substr(split);
+                    long long target = stoll(right);
+                    int m = left.size();
 
-                for (int mask = 0; mask < ways; ++mask) {
                     vector<double> vals;
                     vector<string> exprs;
                     string cur;
@@ -200,27 +221,51 @@ int main() {
                         }
                     }
 
-                    TaskContext ctx(TIMEOUT_PER_TASK_MS);
-                    tryMergeAndRecur(vals, exprs, (double)target, localSolutions, ctx);
-                }
+                    TaskContext ctx(user_timeout);
+                    bool timed_out = false;
+                    unordered_set<string> localSolutions;
 
-                if (!localSolutions.empty()) {
-                    lock_guard<mutex> lock(coutMutex);
-                    cout << "Thread " << t << ": Found " << localSolutions.size() << " solution(s) for " << left << endl;
-                }
+                    tryMergeAndRecur(vals, exprs, (double)target, localSolutions, ctx, timed_out);
 
-                threadSolutions[t].insert(localSolutions.begin(), localSolutions.end());
+                    if (!localSolutions.empty()) {
+                        lock_guard<mutex> lock(coutMutex);
+                        threadResults[t].emplace_back(split * 10000 + mask, localSolutions);
+                    }
+
+                    if (timed_out) {
+                        lock_guard<mutex> lock(coutMutex);
+                        cout << "Thread " << t << ": Timeout at " << left
+                             << " (mask=" << mask << ")\n";
+                        timedOutTasks.push_back(Task(split, mask));
+                    }
+                }
+            });
+        }
+
+        for (auto& th : threads) {
+            th.join();
+        }
+
+        for (int t = 0; t < (int)numThreads; ++t) {
+            for (const auto& pr : threadResults[t]) {
+                allSolutions.insert(pr.second.begin(), pr.second.end());
             }
-        });
-    }
+        }
 
-    for (auto& th : threads) {
-        th.join();
-    }
+        if (!timedOutTasks.empty()) {
+            cout << "\n" << timedOutTasks.size() << " task(s) timed out.\n";
+            cout << "Increase timeout and retry? (new timeout in ms, 0=unlimited, -1=stop): " << flush;
+            int new_timeout;
+            if (!(cin >> new_timeout) || new_timeout < 0) break;
 
-    for (int t = 0; t < (int)numThreads; ++t) {
-        allSolutions.insert(threadSolutions[t].begin(), threadSolutions[t].end());
-    }
+            user_timeout = new_timeout;
+            pendingTasks = timedOutTasks;
+            timeout_retry_count++;
+        } else {
+            pendingTasks.clear();
+        }
+
+    } while (!pendingTasks.empty());
 
     if (allSolutions.empty()) {
         cout << "\nNo solution found.\n";
