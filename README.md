@@ -2,12 +2,12 @@
 
 A C++ expression solver that finds mathematical equations by inserting operators between digits while preserving their order.
 
-**Latest: v0.2** · Now with timeout mechanism and 2x performance boost
+**Latest: v0.3** · Multi-threaded search with optimized timeout checking
 
 ##  Quick Start
 
-Download the latest release: **[NumberSolver-v0.2.exe](../../releases)**
+Download the latest release: **[NumberSolver-v0.3.exe](../../releases)**
 
 ```bash
 # Run directly - no installation required
-./NumberSolver-v0.2.exe
+./NumberSolver-v0.3.exe
